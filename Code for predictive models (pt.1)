@@ -1,0 +1,307 @@
+setwd("~/Desktop/Hackathon 2021")
+
+install.packages("tidyverse")
+install.packages("car")
+install.packages("rpart")
+install.packages("rpart.plot")
+install.packages("nnet")
+install.packages("randomForest")
+install.packages("effects")
+install.packages("data.table")
+install.packages("corrplot")
+
+
+library("tidyverse")
+library("car")
+library("rpart")
+library("rpart.plot")
+library("nnet")
+library("randomForest")
+library("effects")
+library(data.table)
+library("corrplot") 
+library("dplyr")
+library("car")
+library("forcats")
+library("rpart")
+library("rpart.plot")
+library("nnet")
+library("foreign")
+library("corrplot")
+library("randomForest")
+library("pdp")
+library("ggplot2")
+library("gplots")
+
+source('BCA_functions_source_file.R')
+
+fsa  <- read.csv("FSA_DATASET.CSV")
+survey <- read.csv("SURVEY_DATASET.csv")
+usg    <- read.csv("USAGE_DATASET.csv")
+
+usg$power_us <- as.factor(usg$power_us)
+
+view(fsa)
+view(survey)
+view(usg)
+
+#takes alot of time
+usg1 <- usg %>% mutate(number = sapply(1:length(pt_id),function(i)sum(pt_id[i]==pt_id[1:i])))
+
+view(usg1)
+
+# %>% #Shift command M creates a pipe. alternative for $
+names(usg1)[names(usg1) == "clinic_fsa"] <- "fsa"
+
+view(usg1)
+
+uniq_clinic <- dcast(setDT(usg1), pt_id~number, value.var=c('fsa','freq','power_us'))
+
+view(uniq_clinic)
+names(uniq_clinic)[names(uniq_clinic) == "fsa_1"] <- "fsa"
+view(uniq_clinic)
+
+clinic2 <- survey %>% 
+  merge(uniq_clinic,by = "pt_id") %>% ##primary key
+  merge(fsa, by = "fsa")  ## foreign key
+
+
+
+view(clinic2)
+
+variable.summary(clinic2)
+
+summary(clinic2)
+
+clinic2$bmi_class <- fct_explicit_na(clinic2$bmi_class, # Factor of interest
+                                  na_level = "NR") # replacement value
+
+clinic2$perc_weight <- fct_explicit_na(clinic2$perc_weight, # Factor of interest
+                                 na_level = "NR") # replacement value
+
+view(clinic2)
+
+row.names(clinic2) <- clinic2$X.x # Set "ID" as record name
+clinic2$X.x <- NULL
+row.names(clinic2) <- clinic2$X.y # Set "ID" as record name
+clinic2$X.y <- NULL
+row.names(clinic2) <- clinic2$pt_id # Set "ID" as record name
+clinic2$pt_id <- NULL
+
+view(clinic2)
+
+# Copy & paste given variable names into the predictor list
+paste(names(clinic2), collapse = " + ")
+
+variable.summary(clinic2)
+
+
+
+
+###### IDK IF WE NEED
+r.train   <- filter(clinic2,Sample == "Estimation") 
+r.test    <- filter(clinic2,Sample == "Validation")
+r.holdout <- filter(clinic2,Sample =="Holdout" )
+
+
+
+# Correlation Matrix
+# Select numeric columns only, then calculate and print correlation coefficients
+corrMatrix <- cor(select_if(clinic2, is.numeric)) # see ?dplyr::select_if
+# temporarily reduce the number of output digits for easier inspection
+options(digits = 2)
+corrMatrix
+options(digits = 7) # then reset output digits     
+
+
+# Visualize correlation
+corrplot(corrMatrix,method="number",type="lower",
+         diag = FALSE,number.cex = 0.7)                
+
+
+
+
+view(clinic2)
+
+###Logisitic
+model1 <- glm(power_us_1 ~ income + age + edu + perc_health + perc_weight + bmi_class + arthritis + 
+                highBP + diabetes + stroke + repstrain + injstatus + physactivityindicator  + 
+                perc_mentalHealth + perc_lifstress + perc_workstress + care_language + othercare + spending  + 
+                pop_fsa + median_age_fsa + hhold_fsa + median_income_fsa + hhold_work_health + 
+                avg_spend_health + avg_dcost + avg_insur_prem + tot_spend_toba_alco,
+              data = r.train, family = binomial(logit))
+summary(model1)
+
+
+####Stepwise
+model2.step_int <- step(model1,direction="both")
+
+summary(model2.step_int)
+
+
+#random forest
+model2.RF<-randomForest(power_us_1 ~ income + age + edu + perc_health + perc_weight + bmi_class + arthritis + 
+                          highBP + diabetes + stroke + repstrain + injstatus + physactivityindicator  + 
+                          perc_mentalHealth + perc_lifstress + perc_workstress + care_language + othercare + spending  + 
+                          pop_fsa + median_age_fsa + hhold_fsa + median_income_fsa + hhold_work_health + 
+                          avg_spend_health + avg_dcost + avg_insur_prem + tot_spend_toba_alco,
+                        data=r.train,
+                        mtry=sqrt(16), ntree= 500,
+                        importance = TRUE)
+
+model2.RF
+
+importance(model2.RF,type = 2)
+varImpPlot(model2.RF,type = 2, main = "Importance Plot")
+
+
+
+WesForestAllv <- randomForest(formula = power_us_1 ~ income + age + edu + perc_health + perc_weight + bmi_class + arthritis + 
+                                highBP + diabetes + stroke + repstrain + injstatus + physactivityindicator  + 
+                                perc_mentalHealth + perc_lifstress + perc_workstress + care_language + othercare + spending  + 
+                                pop_fsa + median_age_fsa + hhold_fsa + median_income_fsa + hhold_work_health + 
+                                avg_spend_health + avg_dcost + avg_insur_prem + tot_spend_toba_alco,
+                              data = filter(clinic2, Sample =="Estimation"),
+                              importance = TRUE,
+                              ntree = 500, mtry = 4)
+
+WesForestAllv[["confusion"]]
+
+
+varImpPlot(WesForestAllv, type = 2,
+           main = "WesForestAllv",
+           cex = 0.7) 
+
+
+
+
+
+
+WesForestAllv2 <- randomForest(formula = power_us_1 ~ age + perc_health + perc_weight + 
+                                 physactivityindicator + othercare,
+                              data = filter(clinic2, Sample =="Estimation"),
+                              importance = TRUE,
+                              ntree = 500, mtry = 4)
+
+WesForestAllv2[["confusion"]]
+
+
+varImpPlot(WesForestAllv2, type = 2,
+           main = "WesForestAllv2",
+           cex = 0.7) 
+
+
+#####Running a Neural Net
+model5.Neunet <- Nnet(formula = power_us_1 ~ income + age + edu + perc_health + perc_weight + bmi_class + arthritis + 
+                        highBP + diabetes + stroke + repstrain + injstatus + physactivityindicator  + 
+                        perc_mentalHealth + perc_lifstress + perc_workstress + care_language + othercare + spending  + 
+                        pop_fsa + median_age_fsa + hhold_fsa + median_income_fsa + hhold_work_health + 
+                        avg_spend_health + avg_dcost + avg_insur_prem + tot_spend_toba_alco,
+                      data = r.train,
+                      decay = 0.10, # decay parameter
+                      size = 2)
+model5.Neunet$value
+summary(model5.Neunet)
+
+
+model5.Neunet2 <- Nnet(formula = power_us_1 ~ age + perc_health + perc_weight + 
+                        physactivityindicator + othercare,
+                      data = r.train,
+                      decay = 0.10, # decay parameter
+                      size = 2)
+model5.Neunet2$value
+summary(model5.Neunet2)
+
+
+
+
+#####Running a Classification Tree
+model3.rpart <- rpart(formula = power_us_1 ~ income + age + edu + perc_health + perc_weight + bmi_class + arthritis + 
+                        highBP + diabetes + stroke + repstrain + injstatus + physactivityindicator  + 
+                        perc_mentalHealth + perc_lifstress + perc_workstress + care_language + othercare + spending  + 
+                        pop_fsa + median_age_fsa + hhold_fsa + median_income_fsa + hhold_work_health + 
+                        avg_spend_health + avg_dcost + avg_insur_prem + tot_spend_toba_alco,
+                      data = r.train,
+                      cp = 0.0001, #set to 0.0001 to check 
+                      model = TRUE)
+
+plotcp(model3.rpart)
+printcp(model3.rpart)
+
+rpart.plot(model3.rpart,type=1,extra=2,fallen.leaves = FALSE,uniform=TRUE, yes.text="true",no.text="false",cex=0.6,digits=2)
+
+
+
+
+###Lift Charts
+
+summary(r.train)
+
+#Estimation - Cumulative
+lift.chart(modelList = c("model1","model2.RF", "model2.step_int","model5.Neunet","model3.rpart", "model5.Neunet"),
+           data = filter(clinic2, Sample == "Estimation"),
+           targLevel = "1", 
+           trueResp = 0.22,
+           type = "cumulative", sub = "Estimation")
+#Validation - Cumulative
+lift.chart(modelList = c("model1","model2.RF", "model2.step_int", "model5.Neunet2","model3.rpart","model5.Neunet"),
+           data = r.test,
+           targLevel = "1", 
+           trueResp = 0.22,
+           type = "cumulative", sub = "Validation")
+
+lift.chart(modelList = c("model5.Neunet2"),
+           data = r.test,
+           targLevel = "1",
+           trueResp = 0.22,
+           type = "cumulative", # "incremental" instead of "cumulative" 
+           sub = "Validation")
+
+
+#Incremental 
+lift.chart(modelList = c("model5.Neunet2"),
+           data = r.test,
+           targLevel = "1",
+           trueResp = 0.22,
+           type = "incremental", # "incremental" instead of "cumulative" 
+           sub = "Validation")
+
+
+#Effects Plot
+plot(allEffects(model5.Neunet2),type = "response")
+#Partial Dependency Plot for Random Forest
+
+partialPlot(model2.RF,
+            pred.data = r.test,
+            x.var = age,
+            sub = "Validation Set", 
+            which.class = "1")
+partialPlot(model2.RF,
+            pred.data = r.test,
+            x.var = income,
+            sub = "Validation Set", 
+            which.class = "1")
+
+
+
+row.names(clinic2) <- clinic2$X.x # Set "ID" as record name
+clinic2$X.x <- NULL
+row.names(clinic2) <- clinic2$X.y # Set "ID" as record name
+
+
+# Put dustomer ID's back as a variable
+clinic2$pt_id <- rownames(clinic2)
+
+##Scoring Prediction
+clinic2$power.model5.Neunet2 <- rawProbScore(model = "model5.Neunet2",
+                                               data = clinic2,
+                                               targLevel = "1") 
+
+clinic2$power.model5.Neunet2
+
+Submission.model2.step <- clinic2[clinic2$Sample == "Holdout",c("pt_id","power.model5.Neunet2")]
+
+
+names(Submission.model2.step) <- c("pt_id", "score")
+
+write.csv(Submission.model2.step,"Submission.model2.step_default.csv")
